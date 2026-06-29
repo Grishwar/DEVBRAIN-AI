@@ -1,0 +1,16 @@
+# ==========================
+# DevBrain AI Requirements
+# Python 3.11
+# ==========================
+
+# Core AI Memory Layer
+cognee==1.2.2
+
+# GitHub Integration
+PyGithub==2.3.0
+
+# Environment Variables
+python-dotenv==1.0.1
+
+# Optional (safe to include)
+requests>=2.32.0
