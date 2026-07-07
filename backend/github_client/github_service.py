@@ -1,280 +1,232 @@
 """
-GitHub Service
+GitHub service — fetches repository content using PyGithub.
 
-Responsible for:
-- Connecting to GitHub
-- Reading repositories
-- Downloading source code
-- Reading README
-- Reading commits
-- Reading pull requests
-- Reading issues
+Optimized for Groq Free Tier:
+- Limits repository size
+- Skips unnecessary folders
+- Reduces token usage
 """
 
-from __future__ import annotations
-
 import os
-from typing import List, Optional
+from typing import Optional
+from github import Github, Repository
 
-from github import Github
-from github.Repository import Repository
 
-from utils.helpers import (
-    is_text_file,
-    repo_path,
-)
+# ---------------------------------------------------------
+# Free Tier Limits
+# ---------------------------------------------------------
+
+MAX_FILES = 15
+MAX_FILE_SIZE = 50_000
+
+SKIP_FOLDERS = {
+    ".git",
+    ".github",
+    ".next",
+    "node_modules",
+    "dist",
+    "build",
+    "coverage",
+    "__pycache__",
+    ".venv",
+    "venv",
+    ".idea",
+    ".vscode",
+}
+
+ALLOWED_EXTENSIONS = {
+    ".py",
+    ".js",
+    ".jsx",
+    ".ts",
+    ".tsx",
+    ".json",
+    ".md",
+    ".txt",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".css",
+    ".html",
+}
 
 
 class GitHubService:
-    """
-    Wrapper around the PyGithub library.
-    """
+    """Wrapper around PyGithub."""
 
     def __init__(self, token: Optional[str] = None):
+        self._token = token or os.getenv("GITHUB_TOKEN")
+        self._client = Github(self._token)
 
-        self.token = token or os.getenv("GITHUB_TOKEN")
-
-        if not self.token:
-            raise ValueError("GITHUB_TOKEN is missing from .env")
-
-        self.client = Github(self.token)
-
-    # ------------------------------------------------------------
-    # Repository
-    # ------------------------------------------------------------
-
-    def get_repository(self, repository: str) -> Repository:
-        """
-        Returns a Repository object.
-
-        Example:
-            "Grishwar/DEVBRAIN-AI"
-        """
-
-        return self.client.get_repo(repository)
-
-    def get_repository_from_url(self, url: str) -> Repository:
-        """
-        Returns repository from GitHub URL.
-        """
-
-        return self.get_repository(repo_path(url))
-
-    # ------------------------------------------------------------
-    # README
-    # ------------------------------------------------------------
-
-    def get_readme(self, repo: Repository) -> str:
-
-        try:
-            readme = repo.get_readme()
-
-            return readme.decoded_content.decode(
-                "utf-8",
-                errors="ignore",
-            )
-
-        except Exception:
-
-            return ""
-
-    # ------------------------------------------------------------
-    # Source Files
-    # ------------------------------------------------------------
-
-    def get_source_files(
-        self,
-        repo: Repository,
-        branch: str = "main",
-    ) -> List[str]:
-
-        chunks = []
-
-        try:
-
-            queue = repo.get_contents("", ref=branch)
-
-            while queue:
-
-                item = queue.pop(0)
-
-                if item.type == "dir":
-
-                    queue.extend(
-                        repo.get_contents(
-                            item.path,
-                            ref=branch,
-                        )
-                    )
-
-                elif item.type == "file":
-
-                    if not is_text_file(item.name):
-                        continue
-
-                    if item.size > 100000:
-                        continue
-
-                    try:
-
-                        code = item.decoded_content.decode(
-                            "utf-8",
-                            errors="ignore",
-                        )
-
-                        chunks.append(
-                            f"=== FILE: {item.path} ===\n{code}"
-                        )
-
-                    except Exception:
-                        pass
-
-        except Exception:
-            pass
-
-        return chunks
-
-    # ------------------------------------------------------------
-    # Issues
-    # ------------------------------------------------------------
-
-    def get_open_issues(
-        self,
-        repo: Repository,
-        limit: int = 50,
-    ) -> List[str]:
-
-        chunks = []
-
-        try:
-
-            for issue in repo.get_issues(state="open")[:limit]:
-
-                chunks.append(
-                    f"""
-ISSUE #{issue.number}
-
-Title:
-{issue.title}
-
-Body:
-{issue.body or ""}
-"""
-                )
-
-        except Exception:
-            pass
-
-        return chunks
-
-    # ------------------------------------------------------------
-    # Pull Requests
-    # ------------------------------------------------------------
-
-    def get_pull_requests(
-        self,
-        repo: Repository,
-        limit: int = 20,
-    ) -> List[str]:
-
-        chunks = []
-
-        try:
-
-            pulls = repo.get_pulls(
-                state="closed",
-                sort="updated",
-            )
-
-            count = 0
-
-            for pr in pulls:
-
-                if not pr.merged:
-                    continue
-
-                chunks.append(
-                    f"""
-PULL REQUEST #{pr.number}
-
-Title:
-{pr.title}
-
-Body:
-{pr.body or ""}
-"""
-                )
-
-                count += 1
-
-                if count >= limit:
-                    break
-
-        except Exception:
-            pass
-
-        return chunks
-
-    # ------------------------------------------------------------
-    # Collect Repository Memory
-    # ------------------------------------------------------------
+    def get_repo(self, repo_path: str) -> Repository.Repository:
+        return self._client.get_repo(repo_path)
 
     def collect_chunks(
         self,
-        repo: Repository,
+        repo: Repository.Repository,
         branch: str = "main",
-    ) -> List[str]:
+    ) -> list[str]:
+        """
+        Collect repository chunks.
+
+        Order:
+            README
+            Source files
+            Issues
+            Pull Requests
+        """
 
         chunks = []
 
-        readme = self.get_readme(repo)
-
-        if readme:
-
-            chunks.append(
-                f"=== README ===\n{readme}"
-            )
-
-        chunks.extend(
-            self.get_source_files(
-                repo,
-                branch,
-            )
-        )
-
-        chunks.extend(
-            self.get_open_issues(repo)
-        )
-
-        chunks.extend(
-            self.get_pull_requests(repo)
-        )
+        chunks.extend(self._readme_chunks(repo))
+        chunks.extend(self._source_chunks(repo, branch))
+        chunks.extend(self._issue_chunks(repo))
+        chunks.extend(self._pr_chunks(repo))
 
         return chunks
 
-    # ------------------------------------------------------------
-    # Fetch Single File
-    # ------------------------------------------------------------
-
     def fetch_file(
         self,
-        repo: Repository,
+        repo: Repository.Repository,
         path: str,
         ref: str,
     ) -> Optional[str]:
 
         try:
+            content = repo.get_contents(path, ref=ref)
+            return content.decoded_content.decode(errors="replace")
+        except Exception:
+            return None
 
-            content = repo.get_contents(
-                path,
-                ref=ref,
-            )
+    # -----------------------------------------------------
+    # README
+    # -----------------------------------------------------
 
-            return content.decoded_content.decode(
-                "utf-8",
-                errors="ignore",
-            )
+    def _readme_chunks(self, repo):
+
+        try:
+
+            readme = repo.get_readme()
+
+            return [
+                f"=== README ===\n"
+                f"{readme.decoded_content.decode(errors='replace')[:3000]}"
+            ]
 
         except Exception:
+            return []
 
-            return None
+    # -----------------------------------------------------
+    # Source Files
+    # -----------------------------------------------------
+
+    def _source_chunks(self, repo, branch):
+
+        chunks = []
+
+        try:
+
+            queue = list(repo.get_contents("", ref=branch))
+
+            count = 0
+
+            while queue and count < MAX_FILES:
+
+                item = queue.pop(0)
+
+                # Skip unwanted folders
+
+                if any(folder in item.path.split("/") for folder in SKIP_FOLDERS):
+                    continue
+
+                if item.type == "dir":
+
+                    try:
+                        queue.extend(
+                            repo.get_contents(item.path, ref=branch)
+                        )
+                    except Exception:
+                        pass
+
+                    continue
+
+                if item.size > MAX_FILE_SIZE:
+                    continue
+
+                _, ext = os.path.splitext(item.name)
+
+                if ext.lower() not in ALLOWED_EXTENSIONS:
+                    continue
+
+                try:
+
+                    source = item.decoded_content.decode(errors="replace")
+
+                    chunks.append(
+                        f"=== FILE: {item.path} ===\n{source}"
+                    )
+
+                    count += 1
+
+                except Exception:
+                    pass
+
+        except Exception:
+            pass
+
+        return chunks
+
+    # -----------------------------------------------------
+    # Issues
+    # -----------------------------------------------------
+
+    def _issue_chunks(self, repo):
+
+        chunks = []
+
+        try:
+
+            issues = list(repo.get_issues(state="open"))[:5]
+
+            for issue in issues:
+
+                chunks.append(
+                    f"=== ISSUE #{issue.number}: {issue.title} ===\n"
+                    f"{(issue.body or '')[:500]}"
+                )
+
+        except Exception:
+            pass
+
+        return chunks
+
+    # -----------------------------------------------------
+    # Pull Requests
+    # -----------------------------------------------------
+
+    def _pr_chunks(self, repo):
+
+        chunks = []
+
+        try:
+
+            prs = list(
+                repo.get_pulls(
+                    state="closed",
+                    sort="updated",
+                )
+            )[:5]
+
+            for pr in prs:
+
+                if pr.merged:
+
+                    chunks.append(
+                        f"=== PR #{pr.number}: {pr.title} ===\n"
+                        f"{(pr.body or '')[:500]}"
+                    )
+
+        except Exception:
+            pass
+
+        return chunks

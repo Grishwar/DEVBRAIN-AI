@@ -8,6 +8,8 @@ Responsible for:
 - Creating timeline events
 """
 
+import time
+
 from github_client.github_service import GitHubService
 from memory.cognee_service import CogneeService
 
@@ -16,15 +18,12 @@ from models.schemas import (
     IngestResponse,
 )
 
-from utils.helpers import (
-    dataset_name,
-)
+from utils.helpers import dataset_name
 
 
 class IngestService:
 
     def __init__(self):
-
         self.github = GitHubService()
         self.memory = CogneeService()
 
@@ -33,9 +32,15 @@ class IngestService:
         request: IngestRequest,
     ) -> IngestResponse:
 
-        # -------------------------------------
-        # Dataset name
-        # -------------------------------------
+        total_start = time.time()
+
+        print("\n" + "=" * 70)
+        print("🚀 DEVBRAIN INGEST STARTED")
+        print("=" * 70)
+
+        # -------------------------------------------------
+        # Dataset Name
+        # -------------------------------------------------
 
         dataset = (
             request.dataset_id
@@ -43,21 +48,46 @@ class IngestService:
             else dataset_name(request.repo_url)
         )
 
-        # -------------------------------------
-        # Load repository
-        # -------------------------------------
+        print(f"📦 Dataset: {dataset}")
 
-        repo = self.github.get_repository_from_url(
+        # -------------------------------------------------
+        # Repository Path
+        # -------------------------------------------------
+
+        repo_path = (
             request.repo_url
+            .replace("https://github.com/", "")
+            .replace("http://github.com/", "")
+            .strip("/")
         )
 
-        # -------------------------------------
-        # Read repository
-        # -------------------------------------
+        print(f"📂 Repository: {repo_path}")
+
+        # -------------------------------------------------
+        # Load GitHub Repository
+        # -------------------------------------------------
+
+        start = time.time()
+
+        repo = self.github.get_repo(repo_path)
+
+        print(
+            f"✅ GitHub repository loaded in {time.time() - start:.2f} sec"
+        )
+
+        # -------------------------------------------------
+        # Read Repository Files
+        # -------------------------------------------------
+
+        start = time.time()
 
         chunks = self.github.collect_chunks(
             repo=repo,
             branch=request.branch,
+        )
+
+        print(
+            f"✅ Repository parsed in {time.time() - start:.2f} sec"
         )
 
         if not chunks:
@@ -65,18 +95,45 @@ class IngestService:
                 "Repository contains no readable files."
             )
 
-        # -------------------------------------
-        # Store in Cognee
-        # -------------------------------------
+        print(f"📄 Total Chunks: {len(chunks)}")
 
-        await self.memory.remember(
-            "\n\n".join(chunks),
+        # -------------------------------------------------
+        # Store Repository in Cognee
+        # -------------------------------------------------
+
+        start = time.time()
+
+        await self.memory.add_repository(
             dataset_name=dataset,
+            chunks=chunks,
         )
 
-        # -------------------------------------
-        # Timeline
-        # -------------------------------------
+        print(
+            f"✅ Cognee indexing completed in {time.time() - start:.2f} sec"
+        )
+
+        # -------------------------------------------------
+        # Verify Dataset Exists
+        # -------------------------------------------------
+
+        start = time.time()
+
+        exists = await self.memory.dataset_exists(dataset)
+
+        print(
+            f"✅ Dataset verification completed in {time.time() - start:.2f} sec"
+        )
+
+        if not exists:
+            raise Exception(
+                f"Repository was ingested, but dataset '{dataset}' was not found in Cognee."
+            )
+
+        # -------------------------------------------------
+        # Record Timeline Event
+        # -------------------------------------------------
+
+        start = time.time()
 
         await self.memory.record_timeline_event(
             dataset_name=dataset,
@@ -89,9 +146,19 @@ class IngestService:
             },
         )
 
-        # -------------------------------------
-        # Response
-        # -------------------------------------
+        print(
+            f"✅ Timeline stored in {time.time() - start:.2f} sec"
+        )
+
+        print(
+            f"\n🎉 TOTAL INGEST TIME: {time.time() - total_start:.2f} sec"
+        )
+
+        print("=" * 70 + "\n")
+
+        # -------------------------------------------------
+        # Success Response
+        # -------------------------------------------------
 
         return IngestResponse(
             status="ok",

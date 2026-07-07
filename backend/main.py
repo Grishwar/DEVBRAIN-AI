@@ -31,6 +31,18 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv(override=True)
 
+import os
+
+print("=" * 60)
+print("ENVIRONMENT CHECK")
+print("=" * 60)
+print("LLM_PROVIDER :", os.getenv("LLM_PROVIDER"))
+print("LLM_MODEL    :", os.getenv("LLM_MODEL"))
+print("LLM_API_KEY  :", (os.getenv("LLM_API_KEY") or "")[:12])
+print("GROQ_API_KEY :", (os.getenv("GROQ_API_KEY") or "")[:12])
+print("EMBEDDING_PROVIDER :", os.getenv("EMBEDDING_PROVIDER"))
+print("EMBEDDING_MODEL    :", os.getenv("EMBEDDING_MODEL"))
+print("=" * 60)
 # ------------------------------------------------------------
 # Cognee
 # ------------------------------------------------------------
